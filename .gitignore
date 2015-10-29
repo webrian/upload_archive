@@ -1,0 +1,6 @@
+# Just ignore all files that are not explicitly added
+*
+
+# But not these files
+!.gitignore
+!upload_archive.py
