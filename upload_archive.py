@@ -1,27 +1,30 @@
 #!/usr/bin/env python
 #
+# This script returns HTTP GET requests to upload missing weather data
+# to Wunderground
 #
+# Copyright 2014-2015 Adrian Weber
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from datetime import datetime, timedelta, tzinfo
+from ConfigParser import ConfigParser
 import sqlite3
 import sys
 import urllib
 
-class UTC(tzinfo):
-    def dst(self, dt):
-        return timedelta(hours=0)
-    def utcoffset(self, dt):
-        return timedelta(hours=0)
-
-class ITC(tzinfo):
-    def dst(self, dt):
-        return timedelta(hours=0)
-    def utcoffset(self, dt):
-        return timedelta(hours=7)
-
 def usage(argv):
     print "%s db starttime endtime" % argv[0]
-    sys.exit(0)
+    return 1
 
 def main(argv=None):
     if argv is None:
@@ -30,73 +33,104 @@ def main(argv=None):
     if len(argv) != 4:
         usage(argv)
 
+    # Create a config parser and read the accompanying configuration file. The
+    # configuration file needs to have the same name as the script but 
+    # with .ini suffix
+    config = ConfigParser()
+    config.read("%sini" % argv[0].rstrip('py'))
+
+    # See a full documentation of the protocol at
+    # http://wiki.wunderground.com/index.php/PWS_-_Upload_Protocol
     wu_url = "http://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
 
+    # Start a new dict with default parameter "action" and "ID" and "PASSWORD"
     url_params = { "action": "updateraw",
-        "ID": "IVIENTIA5",
-        "PASSWORD": "rh2N_6rRIXr-eb" }	
+        "ID": config.get("Wunderground", "id"),
+        "PASSWORD": config.get("Wunderground", "password") }	
 
+    # Establish a database connection
     db_connection = argv[1]
     conn = sqlite3.connect(db_connection)
+	# Use a row factory to retrieve the fields easier
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
-
-    # Timezone difference in hours from utc
-    tzone = "ITC"
 
     # Get the start and end time from the command line
     starttime = str(argv[2])
     endtime = str(argv[3])
     args = (starttime, endtime, )
 
+    # Start the shell script output
     print "#!/bin/bash"
 
-    for row in c.execute('SELECT datetime(dateTime, \'unixepoch\', \'localtime\'), outTemp, dewpoint, barometer, windDir, windSpeed, windGust, outHumidity FROM archive WHERE datetime(dateTime, \'unixepoch\') >= strftime(\'%Y-%m-%d %H:%M:%S\', ?) AND datetime(dateTime, \'unixepoch\') <= strftime(\'%Y-%m-%d %H:%M:%S\', ?)', args):
+    query = """SELECT datetime(dateTime, \'unixepoch\', \'localtime\') AS localtime,
+outTemp,
+dewpoint,
+barometer,
+windDir,
+windSpeed,
+windGust,
+outHumidity,
+(
+  SELECT SUM(a.rain)
+  FROM archive AS a
+  WHERE datetime(a.dateTime, 'unixepoch') > strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', '-1 hours'))
+  AND datetime(a.dateTime, 'unixepoch') <= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch'))
+) AS sum_last_hour,
+(
+  SELECT SUM(b.rain)
+  FROM archive AS b
+  WHERE datetime(b.dateTime, 'unixepoch') >= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', 'start of day'))
+  AND datetime(b.dateTime, 'unixepoch') <= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch'))
+) AS sum_day,
+datetime(dateTime, \'unixepoch\') AS utctime
+FROM archive AS c
+WHERE datetime(dateTime, \'unixepoch\') >= strftime(\'%Y-%m-%d %H:%M:%S\', ?)
+AND datetime(dateTime, \'unixepoch\') <= strftime(\'%Y-%m-%d %H:%M:%S\', ?)"""
 
-        if row[0] is not None:
-            # Convert first the datetime from local time to utc
-            dt = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ITC())
-            # print dt.astimezone(UTC())
-            url_params['dateutc'] = urllib.quote(dt.astimezone(UTC()).strftime("%Y-%m-%d %H:%M:%S"))
-        if row[1] is not None:
-            url_params['tempf'] = "%.1f" % row[1]
-        if row[2] is not None:
-            url_params['dewptf'] = "%.1f" % row[2]
-        if row[3] is not None:
-            url_params['baromin'] = "%.3f" % row[3]
-        if row[4] is not None:
-            url_params['winddir'] = "%03.0f" % row[4]
-        if row[5] is not None:
-            url_params['windspeedmph'] = "%.1f" % row[5]
-        if row[6] is not None:
-            url_params['windgustmph'] = "%.1f" % row[6]
-        if row[7] is not None:
-            url_params['humidity'] = "%03.0f" % row[7]
-        # Calculate the rain from the last hour
-        # print "SELECT datetime(dateTime, 'unixepoch', 'localtime'), rain FROM archive WHERE datetime(dateTime, 'unixepoch', 'localtime') <= strftime('%%Y-%%m-%%d %%H:%%M:%%S', '%s') AND datetime(dateTime, 'unixepoch', 'localtime') > strftime('%%Y-%%m-%%d %%H:%%M:%%S', '%s', '-1 hours');" % (row[0], row[0])
+    for row in c.execute(query, args):
 
-        # As arguments we use the timestamp from the current record
-        rainArgs = (row[0], row[0],)
-
-        # Start a new cursor
-        d = conn.cursor()
-        d.execute('SELECT SUM(rain) FROM archive WHERE datetime(dateTime, \'unixepoch\', \'localtime\') <= strftime(\'%Y-%m-%d %H:%M:%S\', ?) AND datetime(dateTime, \'unixepoch\', \'localtime\') > strftime(\'%Y-%m-%d %H:%M:%S\', ?, \'-1 hours\')', rainArgs)
-        rainin = d.fetchone()[0]
-        if rainin is not None:
-            url_params['rainin'] = "%.2f" % rainin
-
-        # Calculate the rain from the last 24 hour 
-        d.execute('SELECT SUM(rain) FROM archive WHERE datetime(dateTime, \'unixepoch\', \'localtime\') <= strftime(\'%Y-%m-%d %H:%M:%S\', ?) AND datetime(dateTime, \'unixepoch\', \'localtime\') > strftime(\'%Y-%m-%d %H:%M:%S\', ?, \'-24 hours\')', rainArgs)
-        dailyrainin = d.fetchone()[0]
-        if dailyrainin is not None:
-            url_params['dailyrainin'] = "%.2f" % dailyrainin
+        if row['utctime'] is not None:
+            url_params['dateutc'] = urllib.quote(row['utctime'])
+        if row['outTemp'] is not None:
+            url_params['tempf'] = "%.1f" % row['outTemp']
+        if row['dewpoint'] is not None:
+            url_params['dewptf'] = "%.1f" % row['dewpoint']
+        if row['barometer'] is not None:
+            url_params['baromin'] = "%.3f" % row['barometer']
+        if row['windDir'] is not None:
+            url_params['winddir'] = "%03.0f" % row['windDir']
+        if row['windSpeed'] is not None:
+            url_params['windspeedmph'] = "%.1f" % row['windSpeed']
+        if row['windGust'] is not None:
+            url_params['windgustmph'] = "%.1f" % row['windGust']
+        if row['outHumidity'] is not None:
+            url_params['humidity'] = "%03.0f" % row['outHumidity']
+        # Calulate parameter "rainin" which is the accumulated rainfall in the
+        # past 60 minutes in inch
+        if row['sum_last_hour'] is not None:
+            url_params['rainin'] = "%.2f" % row['sum_last_hour']
+        # Parameter "dailyrainin" is the rain in inches so far for this day in
+        # local time. For such purposes Sqlite provides the handy modifier
+        # "start of day", see also the documentation at 
+        # https://www.sqlite.org/lang_datefunc.html
+        # Beware: although unreasonable the timestamp 00:00:00 in UTC (i.e.
+        # 17:00:00 in ITC) belongs to the next day, see also comments
+        # in class RESTThread in file restx.py.
+        if row['sum_day'] is not None:
+            url_params['dailyrainin'] = "%.2f" % row['sum_day']
 
         # Add additionally the used software type
         url_params['softwaretype'] = urllib.quote("Custom script")
         urlquery = '&'.join(["%s=%s" % (k, v) for k, v in url_params.items()])
         print "wget -O - \"%s?%s\"" % (wu_url, urlquery)
+        # CSV output for debugging purposes
+        #print ','.join(["%s" % (v) for k, v in url_params.items()])
 
     # Finally close the connection
     conn.close()
+
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

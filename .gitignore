@@ -4,3 +4,4 @@
 # But not these files
 !.gitignore
 !upload_archive.py
+!upload_archive.ini.sample
