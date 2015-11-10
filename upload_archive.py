@@ -74,19 +74,19 @@ outHumidity,
 (
   SELECT SUM(a.rain)
   FROM archive AS a
-  WHERE datetime(a.dateTime, 'unixepoch') > strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', '-1 hours'))
-  AND datetime(a.dateTime, 'unixepoch') <= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch'))
+  WHERE datetime(a.dateTime, 'unixepoch', 'localtime') > strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', 'localtime', '-1 hours'))
+  AND datetime(a.dateTime, 'unixepoch', 'localtime') <= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', 'localtime'))
 ) AS sum_last_hour,
 (
   SELECT SUM(b.rain)
   FROM archive AS b
-  WHERE datetime(b.dateTime, 'unixepoch') >= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', 'start of day'))
-  AND datetime(b.dateTime, 'unixepoch') <= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch'))
+  WHERE datetime(b.dateTime, 'unixepoch', 'localtime') >= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', 'localtime', 'start of day'))
+  AND datetime(b.dateTime, 'unixepoch', 'localtime') <= strftime('%Y-%m-%d %H:%M:%S', datetime(c.dateTime, 'unixepoch', 'localtime'))
 ) AS sum_day,
 datetime(dateTime, \'unixepoch\') AS utctime
 FROM archive AS c
-WHERE datetime(dateTime, \'unixepoch\') >= strftime(\'%Y-%m-%d %H:%M:%S\', ?)
-AND datetime(dateTime, \'unixepoch\') <= strftime(\'%Y-%m-%d %H:%M:%S\', ?)"""
+WHERE datetime(dateTime, \'unixepoch\', \'localtime\') >= strftime(\'%Y-%m-%d %H:%M:%S\', ?)
+AND datetime(dateTime, \'unixepoch\', \'localtime\') <= strftime(\'%Y-%m-%d %H:%M:%S\', ?)"""
 
     for row in c.execute(query, args):
 
